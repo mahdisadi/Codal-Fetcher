@@ -2,7 +2,7 @@ import base64
 import re
 from io import BytesIO
 from typing import Optional
-from config import CODAL_URL
+from config import API_URL
 
 import requests
 from bs4 import BeautifulSoup
@@ -51,11 +51,28 @@ def extract_dpm_code(announcement: dict) -> Optional[str]:
         logger.warning(f"Failed to extract DPM code from {report_url}: {e}")
     return None
 
+def extract_data_from_url(report) -> Optional[str]:
+    """Get announcement URL and extract data"""
+    URL = BASE_URL + report['Url']
+    with requests.Session() as s:
+        s.headers.update(HEADERS)
+        response = s.get(URL)
+        html_content = response.text
+        soup = BeautifulSoup(html_content, 'html.parser')
+        tags_with_ids = soup.find_all(id=True)
+        id_text_dictionary = {}
+
+        for tag in tags_with_ids:
+            tag_id = tag.get('id')
+            tag_text = tag.get_text(strip=True)
+            id_text_dictionary[tag_id] = tag_text
+    return report | id_text_dictionary
+
 def convert_pdf_to_base64_image(announcement: dict) -> Optional[str]:
     """
     Downloads a PDF from an announcement and converts its first page to a base64 encoded PNG image.
     """
-    pdf_url = CODAL_URL + announcement.get("PdfUrl")
+    pdf_url = API_URL + announcement.get("PdfUrl")
     if not pdf_url:
         logger.warning("No PdfUrl found in announcement.")
         return None

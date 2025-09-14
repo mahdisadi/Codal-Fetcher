@@ -6,7 +6,6 @@ logger = logging.getLogger(__name__)
 
 # --- API and URL Configuration ---
 BASE_URL = "https://codal.ir/"
-CODAL_URL = "https://codal.ir/"
 API_URL = "https://search.codal.ir/api/search/v2/q"
 
 HEADERS = {

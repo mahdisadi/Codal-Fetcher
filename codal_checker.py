@@ -80,6 +80,7 @@ class CodalChecker:
 
                 if is_valid:
                     logger.info(f"Found valid historical report: {report.get('Title')}")
+                    report = parsers.extract_data_from_url(report)
                     results.append(report)
             
             if code == current_letter_code:
