@@ -10,6 +10,7 @@ class CodalChecker:
     """
     def __init__(self):
         self.api_client = CodalAPIClient()
+        # This will store the announcement dictionary *including all extracted details*.
         self.last_announcement: Optional[Dict] = None
 
     def fetch_last_announcement(self) -> Optional[Dict]:
@@ -29,18 +30,36 @@ class CodalChecker:
         return latest_cat6 or latest_cat7
 
     def update_last_announcement_if_new(self) -> bool:
-        """Checks for a new announcement and updates the internal state if found."""
+        """
+        Checks for a new announcement, fetches its full details, and updates 
+        the internal state if found.
+        """
         latest = self.fetch_last_announcement()
-        if latest and latest != self.last_announcement:
+        
+        # Check if the announcement is genuinely new by comparing TracingNo (a unique identifier)
+        is_new = latest and (not self.last_announcement or latest.get('TracingNo') != self.last_announcement.get('TracingNo'))
+
+        if is_new:
             logger.info(f"New announcement detected: {latest.get('Title')}")
-            self.last_announcement = latest
+            logger.info("Fetching full details for the new announcement...")
+            
+            # Fetch details once and store the enriched dictionary
+            detailed_announcement = parsers.extract_announcement_details(latest)
+            if not detailed_announcement:
+                logger.error(f"Failed to fetch details for announcement TracingNo: {latest.get('TracingNo')}. Aborting this cycle.")
+                return False
+
+            self.last_announcement = detailed_announcement
             return True
         
         logger.info("No new announcements found.")
         return False
 
     def validate_by_dpm(self, current_announcement: Dict) -> bool:
-        """Validates an announcement by comparing its DPM code to the reference."""
+        """
+        Validates an announcement by comparing its DPM code to the reference.
+        This function no longer makes network calls; it reads from pre-fetched data.
+        """
         if not current_announcement:
             logger.warning("Empty announcement cannot be validated by DPM.")
             return False
@@ -48,23 +67,26 @@ class CodalChecker:
         if current_announcement.get("LetterCode") in NONE_DPM_CODES:
             return False # These codes are not validated by DPM
 
-        # We must have a reference announcement with a DPM code
         if not self.last_announcement:
             logger.warning("No reference announcement to compare DPM code against.")
             return False
             
-        reference_dpm = parsers.extract_dpm_code(self.last_announcement)
+        # Read the DPM code directly from the enriched dictionaries
+        reference_dpm = self.last_announcement.get('DpmCode')
         if not reference_dpm:
             logger.warning("Reference DPM not found. Cannot validate.")
             return False
 
-        current_dpm = parsers.extract_dpm_code(current_announcement)
+        current_dpm = current_announcement.get('DpmCode')
         return current_dpm == reference_dpm
 
     def get_previous_reports(self, symbol: str, current_letter_code: str) -> List[Dict]:
-        """Fetches and validates a history of reports for a given symbol."""
+        """
+        Fetches and validates a history of reports for a given symbol.
+        It now fetches full details for each report once.
+        """
         results = []
-        reference_dpm_exists = bool(parsers.extract_dpm_code(self.last_announcement))
+        reference_dpm = self.last_announcement.get('DpmCode') if self.last_announcement else None
 
         for code in LETTER_CODES:
             params = {"Symbol": symbol, "LetterCode": code}
@@ -72,16 +94,22 @@ class CodalChecker:
             report = announcements[0] if announcements else None
             
             if report:
+                # Fetch full details for the historical report *once*
+                detailed_report = parsers.extract_announcement_details(report)
+                if not detailed_report:
+                    logger.warning(f"Could not fetch details for historical report {report.get('Title')}. Skipping.")
+                    continue
+
                 is_valid = False
                 if code in NONE_DPM_CODES:
                     is_valid = True
-                elif reference_dpm_exists and self.validate_by_dpm(report):
+                elif reference_dpm and self.validate_by_dpm(detailed_report):
                     is_valid = True
 
                 if is_valid:
-                    logger.info(f"Found valid historical report: {report.get('Title')}")
-                    report = parsers.extract_data_from_url(report)
-                    results.append(report)
+                    logger.info(f"Found valid historical report: {detailed_report.get('Title')}")
+                    # The detailed_report already contains all necessary data
+                    results.append(detailed_report)
             
             if code == current_letter_code:
                 break

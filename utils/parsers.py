@@ -1,14 +1,13 @@
 import base64
 import re
 from io import BytesIO
-from typing import Optional
-from config import API_URL
+from typing import Optional, Dict, Any
 
 import requests
 from bs4 import BeautifulSoup
 from pdf2image import convert_from_bytes
 
-from config import logger, BASE_URL, HEADERS, POPPLER_PATH
+from config import logger, BASE_URL, API_URL, HEADERS, POPPLER_PATH
 
 def convert_persian_to_english(datetime_str: str) -> str:
     """Translates Persian digits in a string to English digits."""
@@ -25,48 +24,59 @@ def parse_datetime(datetime_str: str) -> tuple:
     hour, minute, second = map(int, time_part.split(':'))
     return (year, month, day, hour, minute, second)
 
-def extract_dpm_code(announcement: dict) -> Optional[str]:
-    """Extracts DPM code from the announcement detail page's HTML."""
-    if not announcement or "Url" not in announcement:
+def extract_announcement_details(announcement: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """
+    Fetches the announcement detail page, extracts all relevant data,
+    and returns it merged with the original announcement dictionary.
+    
+    This function combines the logic of fetching the page, extracting the
+    DPM code, and grabbing text from all elements with an ID to avoid
+    redundant network requests.
+    """
+    if "Url" not in announcement:
+        logger.warning("No 'Url' key found in the announcement dictionary.")
         return None
 
-    report_url = BASE_URL + announcement["Url"]
+    detail_url = BASE_URL + announcement["Url"]
+    
     try:
-        response = requests.get(report_url, headers=HEADERS)
+        response = requests.get(detail_url, headers=HEADERS)
         response.raise_for_status()
-
         soup = BeautifulSoup(response.text, 'html.parser')
-        dpm_text = ""
 
+        # --- Logic from extract_dpm_code ---
+        dpm_code = None
+        dpm_text = ""
         for element_id in ['ucCapitalIncreaseLicense_lblLicenseCode', 'lblLicenseDesc']:
             element = soup.find(id=element_id)
             if element:
                 dpm_text = element.get_text(strip=True)
                 break
-
+        
         if dpm_text:
             matches = re.findall(r'DPM-IOP-[A-Z0-9]+-[A-Z0-9]', dpm_text)
-            return matches[0] if matches else None
-    except Exception as e:
-        logger.warning(f"Failed to extract DPM code from {report_url}: {e}")
-    return None
+            if matches:
+                dpm_code = matches[0]
 
-def extract_data_from_url(report) -> Optional[str]:
-    """Get announcement URL and extract data"""
-    URL = BASE_URL + report['Url']
-    with requests.Session() as s:
-        s.headers.update(HEADERS)
-        response = s.get(URL)
-        html_content = response.text
-        soup = BeautifulSoup(html_content, 'html.parser')
-        tags_with_ids = soup.find_all(id=True)
+        # --- Logic from extract_data_from_url ---
         id_text_dictionary = {}
-
+        tags_with_ids = soup.find_all(id=True)
         for tag in tags_with_ids:
             tag_id = tag.get('id')
             tag_text = tag.get_text(strip=True)
             id_text_dictionary[tag_id] = tag_text
-    return report | id_text_dictionary
+            
+        # --- Combine all data ---
+        extracted_data = id_text_dictionary
+        extracted_data['DpmCode'] = dpm_code
+        
+        # Return the original announcement data merged with the new data
+        return {**announcement, **extracted_data}
+
+    except requests.RequestException as e:
+        logger.warning(f"Failed to fetch or parse announcement details from {detail_url}: {e}")
+        return None
+
 
 def convert_pdf_to_base64_image(announcement: dict) -> Optional[str]:
     """
